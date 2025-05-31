@@ -24,6 +24,13 @@ static SECURE_LINK_SERVICE_AUTH_TOKEN_KEY: &str = "secure-link-service:auth-toke
 
 define_windows_service!(ffi_secure_link_service_main, secure_link_service_main);
 
+
+static FAILED_TO_READ_ARGUMENTS_ERROR_CODE: u32 = 1;
+static FAILED_TO_GET_AUTH_TOKEN_FROM_CREDENTIAL_MANAGER: u32 = 2;
+static FAILED_TO_CREATE_TOKIO_RUNTIME: u32 = 3;
+static FAILED_TO_CONNECT_TO_SECURE_LINK_SERVER: u32 = 4;
+static SECURE_LINK_STOPPED_WITH_ERROR: u32 = 5;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 
@@ -32,9 +39,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn parse_args(arguments: Vec<OsString>) -> Result<(String, u16), Box<dyn std::error::Error>> {
 
-fn secure_link_service_main(_arguments: Vec<OsString>) {
+    let host = arguments.get(0).ok_or("Expected 2 arguments")?;
+    let port = arguments.get(1).ok_or("Expected 2 arguments")?;
 
+
+    let host = host.to_str().ok_or("failed to parse host argument")?.to_string();
+    let port = port.to_str().ok_or("failed to parse port argument")?.parse::<u16>()?;
+
+    Ok((host, port))
+
+}
+
+fn secure_link_service_main(arguments: Vec<OsString>) {
+    
 
     let (shutdown_signal_sender, mut shutdown_signal_receiver) = tokio::sync::mpsc::unbounded_channel();
 
@@ -80,8 +99,25 @@ fn secure_link_service_main(_arguments: Vec<OsString>) {
         };
 
 
-    let secure_link_server_host = "192.168.12.16";
-    let secure_link_server_port: u16 = 6001;
+    let (secure_link_server_host, secure_link_server_port) =
+        match parse_args(arguments) {
+            Ok(args) => args,
+            Err(err) => {
+                
+                eprintln!("{}", err);
+                
+                report_service_status(
+                    &status_handle,
+                    ServiceState::Stopped,
+                    ServiceControlAccept::empty(),
+                    ServiceExitCode::ServiceSpecific(FAILED_TO_READ_ARGUMENTS_ERROR_CODE),
+                    Duration::from_secs(0),
+                );
+                
+                return;
+            }
+        };
+    
 
     let auth_token = match CredentialManager::get_token(SECURE_LINK_SERVICE_AUTH_TOKEN_KEY) {
         Ok(token) => token,
@@ -92,7 +128,7 @@ fn secure_link_service_main(_arguments: Vec<OsString>) {
                 &status_handle,
                 ServiceState::Stopped,
                 ServiceControlAccept::empty(),
-                ServiceExitCode::ServiceSpecific(2),
+                ServiceExitCode::ServiceSpecific(FAILED_TO_GET_AUTH_TOKEN_FROM_CREDENTIAL_MANAGER),
                 Duration::from_secs(0),
             );
 
@@ -109,7 +145,7 @@ fn secure_link_service_main(_arguments: Vec<OsString>) {
                 &status_handle,
                 ServiceState::Stopped,
                 ServiceControlAccept::empty(),
-                ServiceExitCode::ServiceSpecific(1),
+                ServiceExitCode::ServiceSpecific(FAILED_TO_CREATE_TOKIO_RUNTIME),
                 Duration::from_secs(0),
             );
             return;
@@ -121,7 +157,7 @@ fn secure_link_service_main(_arguments: Vec<OsString>) {
 
         let secure_link_connection_future =
             SecureLink::connect_to_global_channel(
-                secure_link_server_host,
+                &secure_link_server_host,
                 secure_link_server_port,
                 &auth_token
             );
@@ -204,7 +240,7 @@ fn secure_link_service_main(_arguments: Vec<OsString>) {
                             &status_handle,
                             ServiceState::Stopped,
                             ServiceControlAccept::empty(),
-                            ServiceExitCode::ServiceSpecific(4),
+                            ServiceExitCode::ServiceSpecific(SECURE_LINK_STOPPED_WITH_ERROR),
                             Duration::from_secs(0),
                         );
                     }
@@ -216,7 +252,7 @@ fn secure_link_service_main(_arguments: Vec<OsString>) {
                     &status_handle,
                     ServiceState::Stopped,
                     ServiceControlAccept::empty(),
-                    ServiceExitCode::ServiceSpecific(3),
+                    ServiceExitCode::ServiceSpecific(FAILED_TO_CONNECT_TO_SECURE_LINK_SERVER),
                     Duration::from_secs(0),
                 );
 
