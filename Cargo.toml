@@ -1,0 +1,10 @@
+[package]
+name = "secure_link_windows_service"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+secure_link_client = { features = ["load_dev_certs"], version = "0.1.0", git = "https://github.com/4ait/secure_link_client" }
+windows-service = "0.8.0"
+windows_credential_manager_rs = { git = "https://github.com/4ait/windows_credential_manager_rs.git" }
+tokio = { version = "1.0", features = ["full"] }
