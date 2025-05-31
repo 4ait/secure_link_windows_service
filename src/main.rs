@@ -1,5 +1,3 @@
-
-
 use windows_service::service::ServiceType;
 use windows_service::service::ServiceStatus;
 use crate::service_control_handler::ServiceStatusHandle;
@@ -13,57 +11,99 @@ use windows_service::service::ServiceExitCode;
 use windows_service::service::ServiceControlAccept;
 use windows_service::service::ServiceState;
 use std::ffi::OsString;
+use std::fs::File;
+use std::io::Write;
 use secure_link_client::SecureLink;
 use windows_credential_manager_rs::CredentialManager;
+use winreg::RegKey;
+use winreg::enums::*;
 
 #[macro_use]
 extern crate windows_service;
 
 static SECURE_LINK_SERVICE_NAME: &str = "Secure Link Service";
 static SECURE_LINK_SERVICE_AUTH_TOKEN_KEY: &str = "secure-link-service:auth-token-key";
+static REGISTRY_KEY_PATH: &str = "SOFTWARE\\SecureLinkService";
+static REGISTRY_HOST_VALUE: &str = "SecureLink Server Host";
+static REGISTRY_PORT_VALUE: &str = "SecureLink Server Port";
 
 define_windows_service!(ffi_secure_link_service_main, secure_link_service_main);
-
 
 static FAILED_TO_READ_ARGUMENTS_ERROR_CODE: u32 = 1;
 static FAILED_TO_GET_AUTH_TOKEN_FROM_CREDENTIAL_MANAGER: u32 = 2;
 static FAILED_TO_CREATE_TOKIO_RUNTIME: u32 = 3;
 static FAILED_TO_CONNECT_TO_SECURE_LINK_SERVER: u32 = 4;
 static SECURE_LINK_STOPPED_WITH_ERROR: u32 = 5;
+static FAILED_TO_ACCESS_REGISTRY: u32 = 6;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-
-
+   
     service_dispatcher::start(SECURE_LINK_SERVICE_NAME, ffi_secure_link_service_main)?;
 
     Ok(())
 }
 
-fn parse_args(arguments: Vec<OsString>) -> Result<(String, u16), Box<dyn std::error::Error>> {
+fn store_host_port_in_registry(host: &str, port: u16) -> Result<(), Box<dyn std::error::Error>> {
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let key = hklm.create_subkey(REGISTRY_KEY_PATH)?.0;
 
-    let host = arguments.get(0).ok_or("Expected 2 arguments")?;
-    let port = arguments.get(1).ok_or("Expected 2 arguments")?;
+    key.set_value(REGISTRY_HOST_VALUE, &host)?;
+    key.set_value(REGISTRY_PORT_VALUE, &(port as u32))?;
 
+    Ok(())
+}
 
-    let host = host.to_str().ok_or("failed to parse host argument")?.to_string();
-    let port = port.to_str().ok_or("failed to parse port argument")?.parse::<u16>()?;
+fn load_host_port_from_registry() -> Result<(String, u16), Box<dyn std::error::Error>> {
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let key = hklm.open_subkey(REGISTRY_KEY_PATH)?;
 
-    Ok((host, port))
+    let host: String = key.get_value(REGISTRY_HOST_VALUE)?;
+    let port: u32 = key.get_value(REGISTRY_PORT_VALUE)?;
 
+    if port > u16::MAX as u32 {
+        return Err("Port value in registry is out of range".into());
+    }
+
+    Ok((host, port as u16))
+}
+
+fn load_args(arguments: Vec<OsString>) -> Result<(String, u16), Box<dyn std::error::Error>> {
+    
+    let first_arg =
+        arguments.get(0)
+            .map(|os| os.to_str().unwrap_or(""));
+
+    let start_index =
+        if first_arg == Some(SECURE_LINK_SERVICE_NAME) {
+            1
+        } else {
+            0
+        };
+
+    // Check if we have host and port arguments
+    if let (Some(host_arg), Some(port_arg)) = (arguments.get(start_index), arguments.get(start_index + 1)) {
+        // Arguments provided - parse and store them in registry
+        let host = host_arg.to_str().ok_or("failed to parse host argument")?.to_string();
+        let port = port_arg.to_str().ok_or("failed to parse port argument")?.parse::<u16>()?;
+
+        // Store in registry for future use
+        store_host_port_in_registry(&host, port)?;
+
+        Ok((host, port))
+    } else {
+        // No arguments provided - load from registry
+        load_host_port_from_registry()
+    }
 }
 
 fn secure_link_service_main(arguments: Vec<OsString>) {
-    
-
     let (shutdown_signal_sender, mut shutdown_signal_receiver) = tokio::sync::mpsc::unbounded_channel();
 
     let event_handler = move |control_event| -> ServiceControlHandlerResult {
         match control_event {
             ServiceControl::Stop => {
                 // Handle stop event and return control back to the system.
-
                 shutdown_signal_sender.send(()).unwrap();
-
                 ServiceControlHandlerResult::NoError
             }
             // All services must accept Interrogate even if it's a no-op.
@@ -76,9 +116,7 @@ fn secure_link_service_main(arguments: Vec<OsString>) {
 
     let status_handle =
         match acuiring_service_status_handle_result {
-
             Ok(status_handle) => {
-
                 // Report service is starting
                 report_service_status(
                     &status_handle,
@@ -92,32 +130,34 @@ fn secure_link_service_main(arguments: Vec<OsString>) {
             },
 
             Err(err) => {
-
                 eprintln!("Failed to accure service status handler, {}", err);
                 return;
             }
         };
 
-
     let (secure_link_server_host, secure_link_server_port) =
-        match parse_args(arguments) {
+        match load_args(arguments) {
             Ok(args) => args,
             Err(err) => {
-                
                 eprintln!("{}", err);
-                
+
+                let error_code = if err.to_string().contains("registry") || err.to_string().contains("Registry") {
+                    FAILED_TO_ACCESS_REGISTRY
+                } else {
+                    FAILED_TO_READ_ARGUMENTS_ERROR_CODE
+                };
+
                 report_service_status(
                     &status_handle,
                     ServiceState::Stopped,
                     ServiceControlAccept::empty(),
-                    ServiceExitCode::ServiceSpecific(FAILED_TO_READ_ARGUMENTS_ERROR_CODE),
+                    ServiceExitCode::ServiceSpecific(error_code),
                     Duration::from_secs(0),
                 );
-                
+
                 return;
             }
         };
-    
 
     let auth_token = match CredentialManager::get_token(SECURE_LINK_SERVICE_AUTH_TOKEN_KEY) {
         Ok(token) => token,
@@ -136,7 +176,6 @@ fn secure_link_service_main(arguments: Vec<OsString>) {
         }
     };
 
-
     let rt = match Runtime::new() {
         Ok(runtime) => runtime,
         Err(e) => {
@@ -152,9 +191,7 @@ fn secure_link_service_main(arguments: Vec<OsString>) {
         }
     };
 
-
     rt.block_on(async {
-
         let secure_link_connection_future =
             SecureLink::connect_to_global_channel(
                 &secure_link_server_host,
@@ -163,14 +200,11 @@ fn secure_link_service_main(arguments: Vec<OsString>) {
             );
 
         let secure_link_connection_result = tokio::select! {
-
             res = secure_link_connection_future => {
                 res
             }
 
             _ = shutdown_signal_receiver.recv() => {
-
-
                 report_service_status(
                    &status_handle,
                    ServiceState::Stopped,
@@ -180,15 +214,11 @@ fn secure_link_service_main(arguments: Vec<OsString>) {
                 );
 
                 return
-
             }
         };
 
-
         match secure_link_connection_result {
-
             Ok(secure_link) => {
-
                 report_service_status(
                     &status_handle,
                     ServiceState::Running,
@@ -200,14 +230,11 @@ fn secure_link_service_main(arguments: Vec<OsString>) {
                 let secure_link_message_loop_future = secure_link.run_message_loop();
 
                 let result = tokio::select! {
-
                     res = secure_link_message_loop_future => {
                         res
                     }
 
                     _ = shutdown_signal_receiver.recv() => {
-
-
                         report_service_status(
                            &status_handle,
                            ServiceState::Stopped,
@@ -217,7 +244,6 @@ fn secure_link_service_main(arguments: Vec<OsString>) {
                         );
 
                         return
-
                     }
                 };
 
@@ -233,7 +259,6 @@ fn secure_link_service_main(arguments: Vec<OsString>) {
                     }
 
                     Err(err) => {
-
                         eprintln!("{}", err);
 
                         report_service_status(
@@ -260,11 +285,7 @@ fn secure_link_service_main(arguments: Vec<OsString>) {
             }
         }
     });
-
 }
-
-
-
 
 fn report_service_status(
     status_handle: &ServiceStatusHandle,
