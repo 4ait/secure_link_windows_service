@@ -11,8 +11,6 @@ use windows_service::service::ServiceExitCode;
 use windows_service::service::ServiceControlAccept;
 use windows_service::service::ServiceState;
 use std::ffi::OsString;
-use std::fs::File;
-use std::io::Write;
 use secure_link_client::SecureLink;
 use windows_credential_manager_rs::CredentialManager;
 use winreg::RegKey;
