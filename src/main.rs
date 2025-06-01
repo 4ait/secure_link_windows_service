@@ -13,7 +13,7 @@ use windows_service::service::ServiceExitCode;
 use windows_service::service::ServiceControlAccept;
 use windows_service::service::ServiceState;
 use std::ffi::OsString;
-use log::{error, info};
+use log::{error};
 use secure_link_client::{SecureLink, SecureLinkError};
 use winreg::RegKey;
 use winreg::enums::*;
@@ -233,8 +233,7 @@ fn secure_link_service_main(arguments: Vec<OsString>) {
             return;
         }
     };
-
-    info!("got {auth_token} auth token in cred manager, key {REGISTRY_AUTH_TOKEN_VALUE}");
+    
 
     let rt = match Runtime::new() {
         Ok(runtime) => runtime,
