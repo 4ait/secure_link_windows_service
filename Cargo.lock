@@ -1320,7 +1320,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "secure_link_client"
 version = "0.1.0"
-source = "git+https://github.com/4ait/secure_link_client#dc12e00eedd57432ed2b2e6abff3414f17e1a87a"
+source = "git+https://github.com/4ait/secure_link_client#b4c6d7abd9cc3708632b043c2239e49534912f78"
 dependencies = [
  "anyhow",
  "aws-lc-sys",
