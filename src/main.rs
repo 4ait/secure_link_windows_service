@@ -1,3 +1,5 @@
+use clap::Parser;
+use simple_log::LogConfigBuilder;
 use windows_service::service::ServiceType;
 use windows_service::service::ServiceStatus;
 use crate::service_control_handler::ServiceStatusHandle;
@@ -11,10 +13,12 @@ use windows_service::service::ServiceExitCode;
 use windows_service::service::ServiceControlAccept;
 use windows_service::service::ServiceState;
 use std::ffi::OsString;
-use secure_link_client::SecureLink;
+use log::{error};
+use secure_link_client::{SecureLink, SecureLinkError};
 use windows_credential_manager_rs::CredentialManager;
 use winreg::RegKey;
 use winreg::enums::*;
+use winreg::types::ToRegValue;
 
 #[macro_use]
 extern crate windows_service;
@@ -24,6 +28,7 @@ static SECURE_LINK_SERVICE_AUTH_TOKEN_KEY: &str = "secure-link-service:auth-toke
 static REGISTRY_KEY_PATH: &str = "SOFTWARE\\SecureLinkService";
 static REGISTRY_HOST_VALUE: &str = "SecureLink Server Host";
 static REGISTRY_PORT_VALUE: &str = "SecureLink Server Port";
+static REGISTRY_LOG_VALUE: &str = "SecureLink Service Logfile";
 
 define_windows_service!(ffi_secure_link_service_main, secure_link_service_main);
 
@@ -31,70 +36,109 @@ static FAILED_TO_READ_ARGUMENTS_ERROR_CODE: u32 = 1;
 static FAILED_TO_GET_AUTH_TOKEN_FROM_CREDENTIAL_MANAGER: u32 = 2;
 static FAILED_TO_CREATE_TOKIO_RUNTIME: u32 = 3;
 static FAILED_TO_CONNECT_TO_SECURE_LINK_SERVER: u32 = 4;
-static SECURE_LINK_STOPPED_WITH_ERROR: u32 = 5;
-static FAILED_TO_ACCESS_REGISTRY: u32 = 6;
+static FAILED_UNAUTHORIZED: u32 = 5;
+static SECURE_LINK_STOPPED_WITH_ERROR: u32 = 6;
+static FAILED_TO_SETUP_LOGGER: u32 = 7;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-   
+
     service_dispatcher::start(SECURE_LINK_SERVICE_NAME, ffi_secure_link_service_main)?;
 
     Ok(())
 }
 
-fn store_host_port_in_registry(host: &str, port: u16) -> Result<(), Box<dyn std::error::Error>> {
+fn get_service_reg_key() -> Result<RegKey, Box<dyn std::error::Error>> {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     let key = hklm.create_subkey(REGISTRY_KEY_PATH)?.0;
 
-    key.set_value(REGISTRY_HOST_VALUE, &host)?;
-    key.set_value(REGISTRY_PORT_VALUE, &(port as u32))?;
+    Ok(key)
+}
+
+fn store_entry_in_registry<T: ToRegValue>(key: &str, entry: &T) -> Result<(), Box<dyn std::error::Error>> {
+    let reg_key = get_service_reg_key()?;
+    reg_key.set_value(key, entry)?;
+    Ok(())
+}
+fn load_entry_from_registry<T: winreg::types::FromRegValue>(key: &str) -> Result<T, Box<dyn std::error::Error>> {
+    let reg_key = get_service_reg_key()?;
+    Ok(reg_key.get_value::<T, _>(key)?)
+}
+
+
+#[derive(Parser, Debug)]
+struct Args {
+    #[clap(long)]
+    set_host: Option<String>,
+    #[clap(long)]
+    set_port: Option<u16>,
+    #[clap(long)]
+    set_log_file_path: Option<String>
+}
+fn load_args(arguments: Vec<OsString>) -> Result<(String, u16, String), Box<dyn std::error::Error>> {
+    
+    let args = Args::try_parse_from(
+        arguments
+            .iter()
+            .filter(|os| os.to_str().is_some())
+            .map(|os| os.to_str().unwrap())
+    )?;
+    
+
+    let host =
+        if let Some(host) = args.set_host {
+
+            store_entry_in_registry(REGISTRY_HOST_VALUE, &host)?;
+            host
+        }
+        else
+        {
+            load_entry_from_registry(REGISTRY_HOST_VALUE)?
+        };
+
+    let port =
+        if let Some(port) = args.set_port {
+            store_entry_in_registry(REGISTRY_PORT_VALUE, &(port as u32))?;
+            port
+        }
+        else
+        {
+            load_entry_from_registry::<u32>(REGISTRY_PORT_VALUE)? as u16
+        };
+
+    let log_file_path =
+        if let Some(log_file_path) = args.set_log_file_path {
+
+            store_entry_in_registry(REGISTRY_LOG_VALUE, &log_file_path)?;
+
+            log_file_path
+        }
+        else
+        {
+            load_entry_from_registry(REGISTRY_LOG_VALUE)?
+        };
+
+   Ok((host, port, log_file_path))
+
+}
+
+fn setup_file_logger(log_file_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+
+    let config = LogConfigBuilder::builder()
+        .path(log_file_path)
+        .size(1 * 100)
+        .roll_count(10)
+        .level("info")?
+        .output_file()
+        .output_console()
+        .build();
+
+    simple_log::new(config)?;
 
     Ok(())
 }
 
-fn load_host_port_from_registry() -> Result<(String, u16), Box<dyn std::error::Error>> {
-    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    let key = hklm.open_subkey(REGISTRY_KEY_PATH)?;
-
-    let host: String = key.get_value(REGISTRY_HOST_VALUE)?;
-    let port: u32 = key.get_value(REGISTRY_PORT_VALUE)?;
-
-    if port > u16::MAX as u32 {
-        return Err("Port value in registry is out of range".into());
-    }
-
-    Ok((host, port as u16))
-}
-
-fn load_args(arguments: Vec<OsString>) -> Result<(String, u16), Box<dyn std::error::Error>> {
-    
-    let first_arg =
-        arguments.get(0)
-            .map(|os| os.to_str().unwrap_or(""));
-
-    let start_index =
-        if first_arg == Some(SECURE_LINK_SERVICE_NAME) {
-            1
-        } else {
-            0
-        };
-
-    // Check if we have host and port arguments
-    if let (Some(host_arg), Some(port_arg)) = (arguments.get(start_index), arguments.get(start_index + 1)) {
-        // Arguments provided - parse and store them in registry
-        let host = host_arg.to_str().ok_or("failed to parse host argument")?.to_string();
-        let port = port_arg.to_str().ok_or("failed to parse port argument")?.parse::<u16>()?;
-
-        // Store in registry for future use
-        store_host_port_in_registry(&host, port)?;
-
-        Ok((host, port))
-    } else {
-        // No arguments provided - load from registry
-        load_host_port_from_registry()
-    }
-}
-
 fn secure_link_service_main(arguments: Vec<OsString>) {
+
     let (shutdown_signal_sender, mut shutdown_signal_receiver) = tokio::sync::mpsc::unbounded_channel();
 
     let event_handler = move |control_event| -> ServiceControlHandlerResult {
@@ -119,37 +163,32 @@ fn secure_link_service_main(arguments: Vec<OsString>) {
                 report_service_status(
                     &status_handle,
                     ServiceState::StartPending,
-                    ServiceControlAccept::empty(),
+                    ServiceControlAccept::STOP,
                     ServiceExitCode::Win32(0),
-                    Duration::from_secs(30),
+                    Duration::from_secs(25),
                 );
 
                 status_handle
             },
 
             Err(err) => {
-                eprintln!("Failed to accure service status handler, {}", err);
+                error!("Failed to accure service status handler, {}", err);
                 return;
             }
         };
 
-    let (secure_link_server_host, secure_link_server_port) =
+    let (secure_link_server_host, secure_link_server_port, log_file_path) =
         match load_args(arguments) {
             Ok(args) => args,
             Err(err) => {
-                eprintln!("{}", err);
 
-                let error_code = if err.to_string().contains("registry") || err.to_string().contains("Registry") {
-                    FAILED_TO_ACCESS_REGISTRY
-                } else {
-                    FAILED_TO_READ_ARGUMENTS_ERROR_CODE
-                };
+                error!("Failed to load arguments, {}", err);
 
                 report_service_status(
                     &status_handle,
                     ServiceState::Stopped,
                     ServiceControlAccept::empty(),
-                    ServiceExitCode::ServiceSpecific(error_code),
+                    ServiceExitCode::ServiceSpecific(FAILED_TO_READ_ARGUMENTS_ERROR_CODE),
                     Duration::from_secs(0),
                 );
 
@@ -157,10 +196,32 @@ fn secure_link_service_main(arguments: Vec<OsString>) {
             }
         };
 
-    let auth_token = match CredentialManager::get_token(SECURE_LINK_SERVICE_AUTH_TOKEN_KEY) {
+    match setup_file_logger(&log_file_path) {
+
+        Ok(()) => {}
+
+        Err(err) => {
+
+            error!("Failed to setup logger: {}", err);
+
+            report_service_status(
+                &status_handle,
+                ServiceState::Stopped,
+                ServiceControlAccept::empty(),
+                ServiceExitCode::ServiceSpecific(FAILED_TO_SETUP_LOGGER),
+                Duration::from_secs(0),
+            );
+
+        }
+        
+    }
+
+
+    let auth_token = match CredentialManager::load(SECURE_LINK_SERVICE_AUTH_TOKEN_KEY) {
         Ok(token) => token,
         Err(e) => {
-            eprintln!("Failed to load auth token: {}", e);
+
+            error!("Failed to load auth token: {}", e);
 
             report_service_status(
                 &status_handle,
@@ -177,7 +238,9 @@ fn secure_link_service_main(arguments: Vec<OsString>) {
     let rt = match Runtime::new() {
         Ok(runtime) => runtime,
         Err(e) => {
-            eprintln!("Failed to create Tokio runtime: {}", e);
+
+            error!("Failed to create Tokio runtime: {}", e);
+
             report_service_status(
                 &status_handle,
                 ServiceState::Stopped,
@@ -257,7 +320,8 @@ fn secure_link_service_main(arguments: Vec<OsString>) {
                     }
 
                     Err(err) => {
-                        eprintln!("{}", err);
+
+                        error!("{}", err);
 
                         report_service_status(
                             &status_handle,
@@ -266,20 +330,42 @@ fn secure_link_service_main(arguments: Vec<OsString>) {
                             ServiceExitCode::ServiceSpecific(SECURE_LINK_STOPPED_WITH_ERROR),
                             Duration::from_secs(0),
                         );
+
                     }
                 }
             }
 
             Err(err) => {
-                report_service_status(
-                    &status_handle,
-                    ServiceState::Stopped,
-                    ServiceControlAccept::empty(),
-                    ServiceExitCode::ServiceSpecific(FAILED_TO_CONNECT_TO_SECURE_LINK_SERVER),
-                    Duration::from_secs(0),
-                );
 
-                eprintln!("Failed to connect to secure link server: {}", err);
+                match err {
+                    SecureLinkError::UnauthorizedError => {
+
+                        report_service_status(
+                            &status_handle,
+                            ServiceState::Stopped,
+                            ServiceControlAccept::empty(),
+                            ServiceExitCode::ServiceSpecific(FAILED_UNAUTHORIZED),
+                            Duration::from_secs(0),
+                        );
+
+                    }
+
+                    err => {
+
+
+                        error!("Failed to connect to secure link server: {}", err);
+
+                        report_service_status(
+                            &status_handle,
+                            ServiceState::Stopped,
+                            ServiceControlAccept::empty(),
+                            ServiceExitCode::ServiceSpecific(FAILED_TO_CONNECT_TO_SECURE_LINK_SERVER),
+                            Duration::from_secs(0),
+                        );
+
+                    }
+                }
+
             }
         }
     });
@@ -303,6 +389,6 @@ fn report_service_status(
     };
 
     if let Err(e) = status_handle.set_service_status(status) {
-        eprintln!("Failed to set service status: {}", e);
+        error!("Failed to set service status: {}", e);
     }
 }
