@@ -13,9 +13,8 @@ use windows_service::service::ServiceExitCode;
 use windows_service::service::ServiceControlAccept;
 use windows_service::service::ServiceState;
 use std::ffi::OsString;
-use log::{error};
+use log::{error, info};
 use secure_link_client::{SecureLink, SecureLinkError};
-use windows_credential_manager_rs::CredentialManager;
 use winreg::RegKey;
 use winreg::enums::*;
 use winreg::types::ToRegValue;
@@ -24,11 +23,11 @@ use winreg::types::ToRegValue;
 extern crate windows_service;
 
 static SECURE_LINK_SERVICE_NAME: &str = "Secure Link Service";
-static SECURE_LINK_SERVICE_AUTH_TOKEN_KEY: &str = "secure-link-service:auth-token-key";
 static REGISTRY_KEY_PATH: &str = "SOFTWARE\\SecureLinkService";
 static REGISTRY_HOST_VALUE: &str = "SecureLink Server Host";
 static REGISTRY_PORT_VALUE: &str = "SecureLink Server Port";
-static REGISTRY_LOG_VALUE: &str = "SecureLink Service Logfile";
+static REGISTRY_LOG_VALUE: &str = "Service Logfile";
+static REGISTRY_AUTH_TOKEN_VALUE: &str = "Auth Token";
 
 define_windows_service!(ffi_secure_link_service_main, secure_link_service_main);
 
@@ -217,7 +216,7 @@ fn secure_link_service_main(arguments: Vec<OsString>) {
     }
 
 
-    let auth_token = match CredentialManager::load(SECURE_LINK_SERVICE_AUTH_TOKEN_KEY) {
+    let auth_token = match load_entry_from_registry::<String>(REGISTRY_AUTH_TOKEN_VALUE) {
         Ok(token) => token,
         Err(e) => {
 
@@ -234,6 +233,8 @@ fn secure_link_service_main(arguments: Vec<OsString>) {
             return;
         }
     };
+
+    info!("got {auth_token} auth token in cred manager, key {REGISTRY_AUTH_TOKEN_VALUE}");
 
     let rt = match Runtime::new() {
         Ok(runtime) => runtime,

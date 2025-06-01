@@ -6,7 +6,6 @@ edition = "2024"
 [dependencies]
 secure_link_client = { features = ["load_dev_certs"], git = "https://github.com/4ait/secure_link_client" }
 windows-service = "0.8.0"
-windows_credential_manager_rs = { git = "https://github.com/4ait/windows_credential_manager_rs.git" }
 tokio = { version = "1.0", features = ["full"] }
 winreg = "0.55.0"
 log = "0.4.27"
