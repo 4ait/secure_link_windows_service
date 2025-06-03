@@ -40,25 +40,8 @@ static SECURE_LINK_STOPPED_WITH_ERROR: u32 = 6;
 static FAILED_TO_SETUP_LOGGER: u32 = 7;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-
-    let _ = register_event_source();
     
     service_dispatcher::start(SECURE_LINK_SERVICE_NAME, ffi_secure_link_service_main)?;
-
-    Ok(())
-}
-
-fn register_event_source() -> Result<(), Box<dyn std::error::Error>> {
-    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    let event_log_key = hklm.open_subkey_with_flags(
-        "SYSTEM\\CurrentControlSet\\Services\\EventLog\\Application",
-        KEY_WRITE
-    )?;
-
-    let (source_key, _) = event_log_key.create_subkey("SecureLinkService")?;
-
-    // Указываем что поддерживаем все типы событий: Error (4) + Warning (2) + Information (1) = 7
-    source_key.set_value("TypesSupported", &7u32)?;
 
     Ok(())
 }
