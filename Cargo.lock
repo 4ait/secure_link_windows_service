@@ -1344,7 +1344,7 @@ dependencies = [
 
 [[package]]
 name = "secure_link_windows_service"
-version = "0.1.1"
+version = "0.1.7"
 dependencies = [
  "clap",
  "log",
