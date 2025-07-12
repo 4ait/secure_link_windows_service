@@ -1319,8 +1319,8 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "secure_link_client"
-version = "0.1.7"
-source = "git+https://github.com/4ait/secure_link_client?tag=v0.1.7#1dd64f6c7cde8b32f2b9f814edf3d08d174e6bce"
+version = "0.1.8"
+source = "git+https://github.com/4ait/secure_link_client?tag=v0.1.8#e8d957b5db5f9cd9cb111d177216bd022e5c3167"
 dependencies = [
  "anyhow",
  "aws-lc-sys",
@@ -1334,6 +1334,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "static_assertions",
  "thiserror 2.0.12",
  "tokio",
  "tokio-rustls",
@@ -1344,7 +1345,7 @@ dependencies = [
 
 [[package]]
 name = "secure_link_windows_service"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "clap",
  "log",
@@ -1473,6 +1474,12 @@ dependencies = [
  "libc",
  "windows-sys 0.52.0",
 ]
+
+[[package]]
+name = "static_assertions"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "strsim"

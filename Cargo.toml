@@ -1,13 +1,13 @@
 [package]
 name = "secure_link_windows_service"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2024"
 
 [features]
 load_dev_certs = ["secure_link_client/load_dev_certs"]
 
 [dependencies]
-secure_link_client = {git = "https://github.com/4ait/secure_link_client", tag="v0.1.7" }
+secure_link_client = {git = "https://github.com/4ait/secure_link_client", tag="v0.1.8" }
 windows-service = "0.8.0"
 tokio = { version = "1.0", features = ["full"] }
 winreg = "0.55.0"
